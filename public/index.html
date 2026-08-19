@@ -77,12 +77,26 @@
 
     const statusColors = { available: '#16a34a', en_route: '#ea580c', busy: '#dc2626' };
 
-    function coloredIcon(color) {
+    function hospitalIcon() {
       return L.divIcon({
         className: '',
-        html: `<div style="background:${color};width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);"></div>`,
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
+        html: `<div style="background:#2563eb;width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
+                 <span style="transform:rotate(45deg);font-size:15px;">🏥</span>
+               </div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 30],
+        popupAnchor: [0, -28]
+      });
+    }
+
+    function ambulanceIcon(color) {
+      return L.divIcon({
+        className: '',
+        html: `<div style="background:${color};width:26px;height:26px;border-radius:50%;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">
+                 <span style="font-size:13px;">🚑</span>
+               </div>`,
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
       });
     }
 
@@ -92,7 +106,7 @@
       .then(hospitals => {
         statusEl.textContent = `Loaded ${hospitals.length} hospitals from PostGIS`;
         hospitals.forEach(h => {
-          const m = L.marker([h.lat, h.lng])
+          const m = L.marker([h.lat, h.lng], { icon: hospitalIcon() })
             .addTo(map)
             .bindPopup(`<b>${h.name}</b><br>Beds: ${h.bed_capacity}<br>${h.specialties}`);
           hospitalMarkers.push(m);
@@ -119,7 +133,7 @@
       Promise.all(active.map(s => fetch(`/api/ambulances?status=${s}`).then(r => r.json())))
         .then(results => {
           results.flat().forEach(a => {
-            const m = L.marker([a.lat, a.lng], { icon: coloredIcon(statusColors[a.status]) })
+            const m = L.marker([a.lat, a.lng], { icon: ambulanceIcon(statusColors[a.status]) })
               .addTo(map)
               .bindPopup(`<b>${a.plate_number}</b><br>Status: ${a.status}`);
             ambulanceMarkers.push(m);
