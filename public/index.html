@@ -7,46 +7,187 @@
   <style>
     body { margin: 0; font-family: sans-serif; }
     #map { height: 100vh; width: 100%; }
+
     #status {
       position: absolute; top: 10px; left: 50px; z-index: 1000;
       background: white; padding: 8px 14px; border-radius: 6px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 14px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 14px; max-width: 320px;
     }
+
+    #panel {
+      position: absolute; top: 60px; left: 50px; z-index: 1000;
+      background: white; padding: 12px 16px; border-radius: 6px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3); font-size: 13px; width: 300px;
+      max-height: 75vh; overflow-y: auto;
+    }
+    #panel h3 { margin: 0 0 8px 0; font-size: 14px; }
+    #panel .section { margin-bottom: 14px; padding-bottom: 10px; border-bottom: 1px solid #eee; }
+    #panel .section:last-child { border-bottom: none; }
+    #panel label { display: block; margin: 4px 0; cursor: pointer; }
+    #panel button {
+      background: #b91c1c; color: white; border: none; padding: 8px 12px;
+      border-radius: 4px; cursor: pointer; font-size: 13px; width: 100%;
+    }
+    #panel button:hover { background: #991b1b; }
+    #panel button.active { background: #166534; }
+    #resultList { font-size: 12px; }
+    #resultList div { margin-bottom: 6px; padding: 6px; background: #f8f8f8; border-radius: 4px; }
+    .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
   </style>
 </head>
 <body>
   <div id="status">Loading hospitals from API...</div>
+
+  <div id="panel">
+    <div class="section">
+      <h3>Ambulance filter</h3>
+      <label><input type="checkbox" class="statusFilter" value="available" checked>
+        <span class="legend-dot" style="background:#16a34a;"></span>Available</label>
+      <label><input type="checkbox" class="statusFilter" value="en_route" checked>
+        <span class="legend-dot" style="background:#ea580c;"></span>En route</label>
+      <label><input type="checkbox" class="statusFilter" value="busy" checked>
+        <span class="legend-dot" style="background:#dc2626;"></span>Busy</label>
+    </div>
+
+    <div class="section">
+      <h3>Emergency routing</h3>
+      <button id="routeBtn">Click map to set emergency location</button>
+      <div id="resultList"></div>
+    </div>
+  </div>
+
   <div id="map"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script>
-    // Base map centered on Accra, Ghana
     const map = L.map('map').setView([5.6037, -0.1870], 12);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
     const statusEl = document.getElementById('status');
+    const routeBtn = document.getElementById('routeBtn');
+    const resultList = document.getElementById('resultList');
 
-    // Call the Node/Express API, which queries PostGIS
+    let hospitalMarkers = [];
+    let ambulanceMarkers = [];
+    let emergencyMarker = null;
+    let routeLines = [];
+    let routingMode = false;
+
+    const statusColors = { available: '#16a34a', en_route: '#ea580c', busy: '#dc2626' };
+
+    function coloredIcon(color) {
+      return L.divIcon({
+        className: '',
+        html: `<div style="background:${color};width:16px;height:16px;border-radius:50%;border:2px solid white;box-shadow:0 0 3px rgba(0,0,0,0.5);"></div>`,
+        iconSize: [16, 16],
+        iconAnchor: [8, 8]
+      });
+    }
+
+    // ---------- Hospitals (loaded once) ----------
     fetch('/api/hospitals')
-      .then(res => {
-        if (!res.ok) throw new Error('API responded with ' + res.status);
-        return res.json();
-      })
+      .then(res => { if (!res.ok) throw new Error('API responded with ' + res.status); return res.json(); })
       .then(hospitals => {
         statusEl.textContent = `Loaded ${hospitals.length} hospitals from PostGIS`;
         hospitals.forEach(h => {
-          L.marker([h.lat, h.lng])
+          const m = L.marker([h.lat, h.lng])
             .addTo(map)
             .bindPopup(`<b>${h.name}</b><br>Beds: ${h.bed_capacity}<br>${h.specialties}`);
+          hospitalMarkers.push(m);
         });
       })
       .catch(err => {
         statusEl.textContent = 'API/database query failed: ' + err.message;
         statusEl.style.color = 'red';
-        console.error(err);
       });
+
+    // ---------- Ambulances (loaded + filterable) ----------
+    function getActiveStatuses() {
+      return Array.from(document.querySelectorAll('.statusFilter:checked')).map(el => el.value);
+    }
+
+    function loadAmbulances() {
+      ambulanceMarkers.forEach(m => map.removeLayer(m));
+      ambulanceMarkers = [];
+
+      const active = getActiveStatuses();
+      if (active.length === 0) return;
+
+      // Fetch each active status separately since the API filters one status per request
+      Promise.all(active.map(s => fetch(`/api/ambulances?status=${s}`).then(r => r.json())))
+        .then(results => {
+          results.flat().forEach(a => {
+            const m = L.marker([a.lat, a.lng], { icon: coloredIcon(statusColors[a.status]) })
+              .addTo(map)
+              .bindPopup(`<b>${a.plate_number}</b><br>Status: ${a.status}`);
+            ambulanceMarkers.push(m);
+          });
+        })
+        .catch(err => console.error('Ambulance load failed:', err));
+    }
+
+    document.querySelectorAll('.statusFilter').forEach(cb => cb.addEventListener('change', loadAmbulances));
+    loadAmbulances();
+    setInterval(loadAmbulances, 15000); // periodic refresh, simulates live tracking
+
+    // ---------- Emergency routing calculation ----------
+    routeBtn.addEventListener('click', () => {
+      routingMode = !routingMode;
+      routeBtn.textContent = routingMode ? 'Click anywhere on the map...' : 'Click map to set emergency location';
+      routeBtn.classList.toggle('active', routingMode);
+    });
+
+    map.on('click', (e) => {
+      if (!routingMode) return;
+      routingMode = false;
+      routeBtn.textContent = 'Click map to set emergency location';
+      routeBtn.classList.remove('active');
+
+      const { lat, lng } = e.latlng;
+
+      if (emergencyMarker) map.removeLayer(emergencyMarker);
+      routeLines.forEach(l => map.removeLayer(l));
+      routeLines = [];
+
+      emergencyMarker = L.marker([lat, lng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div style="background:#111827;width:18px;height:18px;border-radius:50%;border:3px solid #fbbf24;"></div>`,
+          iconSize: [18, 18], iconAnchor: [9, 9]
+        })
+      }).addTo(map).bindPopup('Emergency location').openPopup();
+
+      resultList.innerHTML = 'Calculating nearest hospital and ambulance...';
+
+      fetch(`/api/route-emergency?lat=${lat}&lng=${lng}`)
+        .then(res => { if (!res.ok) throw new Error('API responded with ' + res.status); return res.json(); })
+        .then(data => {
+          let html = '';
+
+          if (data.nearest_hospitals.length) {
+            const nearestH = data.nearest_hospitals[0];
+            const line = L.polyline([[lat, lng], [nearestH.lat, nearestH.lng]], { color: '#2563eb', weight: 3, dashArray: '6,4' }).addTo(map);
+            routeLines.push(line);
+            html += `<div><b>Nearest hospital:</b><br>${nearestH.name} — ${nearestH.distance_km} km<br>Beds: ${nearestH.bed_capacity}</div>`;
+          }
+
+          if (data.nearest_ambulances.length) {
+            const nearestA = data.nearest_ambulances[0];
+            const line = L.polyline([[lat, lng], [nearestA.lat, nearestA.lng]], { color: '#16a34a', weight: 3, dashArray: '2,6' }).addTo(map);
+            routeLines.push(line);
+            html += `<div><b>Nearest available ambulance:</b><br>${nearestA.plate_number} — ${nearestA.distance_km} km</div>`;
+          } else {
+            html += `<div><b>No available ambulances found.</b></div>`;
+          }
+
+          resultList.innerHTML = html;
+        })
+        .catch(err => {
+          resultList.innerHTML = `<div style="color:red;">Routing calculation failed: ${err.message}</div>`;
+        });
+    });
   </script>
 </body>
 </html>
