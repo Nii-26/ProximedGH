@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <title>ProxiMed GH — Staging</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet-locatecontrol/0.83.1/L.Control.Locate.min.css" />
   <style>
     body { margin: 0; font-family: sans-serif; }
     #map { height: 100vh; width: 100%; }
@@ -59,8 +60,9 @@
   <div id="map"></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-locatecontrol/0.83.1/L.Control.Locate.min.js"></script>
   <script>
-    const map = L.map('map').setView([5.6037, -0.1870], 12);
+    const map = L.map('map', { zoomControl: false }).setView([5.6037, -0.1870], 12);
 
     // Basemap options — switchable via the layer control (top-right icon)
     const streetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -81,15 +83,25 @@
       attribution: 'Tiles &copy; Esri'
     });
 
-    // Light is the default basemap on load
-    lightLayer.addTo(map);
+    // Streets (OpenStreetMap) is the default basemap on load
+    streetsLayer.addTo(map);
 
     L.control.layers({
-      'Light': lightLayer,
       'Streets': streetsLayer,
+      'Light': lightLayer,
       'Dark': darkLayer,
       'Satellite': satelliteLayer
     }, {}, { position: 'topright', collapsed: true }).addTo(map);
+
+    // "Locate me" control — centers the map on the user's current GPS position
+    L.control.locate({
+      position: 'topright',
+      strings: { title: 'Show my location' },
+      locateOptions: { enableHighAccuracy: true }
+    }).addTo(map);
+
+    // Zoom control — added last so it stacks at the bottom of the top-right group
+    L.control.zoom({ position: 'topright' }).addTo(map);
 
     const statusEl = document.getElementById('status');
     const routeBtn = document.getElementById('routeBtn');
