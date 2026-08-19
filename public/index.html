@@ -61,9 +61,35 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script>
     const map = L.map('map').setView([5.6037, -0.1870], 12);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+
+    // Basemap options — switchable via the layer control (top-right icon)
+    const streetsLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
+    });
+
+    const lightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      subdomains: 'abcd'
+    });
+
+    const darkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      subdomains: 'abcd'
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Tiles &copy; Esri'
+    });
+
+    // Light is the default basemap on load
+    lightLayer.addTo(map);
+
+    L.control.layers({
+      'Light': lightLayer,
+      'Streets': streetsLayer,
+      'Dark': darkLayer,
+      'Satellite': satelliteLayer
+    }, {}, { position: 'topright', collapsed: true }).addTo(map);
 
     const statusEl = document.getElementById('status');
     const routeBtn = document.getElementById('routeBtn');
