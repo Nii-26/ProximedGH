@@ -31,6 +31,9 @@
     }
     #panel button:hover { background: #991b1b; }
     #panel button.active { background: #166534; }
+    #confirmDispatchBtn { background: #166534; }
+    #confirmDispatchBtn:hover { background: #14532d; }
+    #confirmDispatchBtn:disabled { background: #9ca3af; cursor: not-allowed; }
     #resultList { font-size: 12px; }
     #resultList div { margin-bottom: 6px; padding: 6px; background: #f8f8f8; border-radius: 4px; }
     .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
@@ -212,6 +215,9 @@
       }).addTo(map).bindPopup('Emergency location').openPopup();
 
       resultList.innerHTML = 'Calculating nearest hospital and ambulance...';
+      let lastEmergency = { lat, lng };
+      let lastNearestHospital = null;
+      let lastNearestAmbulance = null;
 
       fetch(`/api/route-emergency?lat=${lat}&lng=${lng}`)
         .then(res => { if (!res.ok) throw new Error('API responded with ' + res.status); return res.json(); })
@@ -220,6 +226,7 @@
 
           if (data.nearest_hospitals.length) {
             const nearestH = data.nearest_hospitals[0];
+            lastNearestHospital = nearestH;
             const line = L.polyline([[lat, lng], [nearestH.lat, nearestH.lng]], { color: '#2563eb', weight: 3, dashArray: '6,4' }).addTo(map);
             routeLines.push(line);
             html += `<div><b>Nearest hospital:</b><br>${nearestH.name} — ${nearestH.distance_km} km<br>Beds: ${nearestH.bed_capacity}</div>`;
@@ -227,14 +234,55 @@
 
           if (data.nearest_ambulances.length) {
             const nearestA = data.nearest_ambulances[0];
+            lastNearestAmbulance = nearestA;
             const line = L.polyline([[lat, lng], [nearestA.lat, nearestA.lng]], { color: '#16a34a', weight: 3, dashArray: '2,6' }).addTo(map);
             routeLines.push(line);
             html += `<div><b>Nearest available ambulance:</b><br>${nearestA.plate_number} — ${nearestA.distance_km} km</div>`;
+
+            if (lastNearestHospital) {
+              html += `<button id="confirmDispatchBtn" style="margin-top:6px;">Confirm Dispatch</button>`;
+            }
           } else {
             html += `<div><b>No available ambulances found.</b></div>`;
           }
 
           resultList.innerHTML = html;
+
+          const confirmBtn = document.getElementById('confirmDispatchBtn');
+          if (confirmBtn) {
+            confirmBtn.addEventListener('click', () => {
+              confirmBtn.disabled = true;
+              confirmBtn.textContent = 'Dispatching...';
+
+              fetch('/api/dispatch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  lat: lastEmergency.lat,
+                  lng: lastEmergency.lng,
+                  description: 'Emergency reported via ProxiMed GH',
+                  severity: 'high',
+                  ambulance_id: lastNearestAmbulance.ambulance_id,
+                  hospital_id: lastNearestHospital.hospital_id
+                })
+              })
+                .then(res => res.json().then(body => ({ ok: res.ok, body })))
+                .then(({ ok, body }) => {
+                  if (!ok) throw new Error(body.error || 'Dispatch failed');
+                  resultList.innerHTML = `<div style="background:#dcfce7;color:#166534;">
+                    <b>Dispatch confirmed</b><br>
+                    ${lastNearestAmbulance.plate_number} → ${lastNearestHospital.name}<br>
+                    Dispatch #${body.dispatch_id}
+                  </div>`;
+                  loadAmbulances(); // refresh markers so the dispatched ambulance shows as en_route
+                })
+                .catch(err => {
+                  resultList.innerHTML += `<div style="color:red;">Dispatch failed: ${err.message}</div>`;
+                  confirmBtn.disabled = false;
+                  confirmBtn.textContent = 'Confirm Dispatch';
+                });
+            });
+          }
         })
         .catch(err => {
           resultList.innerHTML = `<div style="color:red;">Routing calculation failed: ${err.message}</div>`;

@@ -141,6 +141,78 @@ app.get('/api/route-emergency', async (req, res) => {
   }
 });
 
+// One-click dispatch assignment: persists an incident, creates a dispatch record
+// linking it to the chosen ambulance and hospital, and marks that ambulance en_route.
+app.post('/api/dispatch', async (req, res) => {
+  const { lat, lng, description, severity, ambulance_id, hospital_id } = req.body;
+
+  if (
+    typeof lat !== 'number' || typeof lng !== 'number' ||
+    !ambulance_id || !hospital_id
+  ) {
+    return res.status(400).json({ error: 'lat, lng, ambulance_id, and hospital_id are required' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Confirm the ambulance is still available — prevents double-dispatching
+    // if two dispatchers act on the same unit at nearly the same time.
+    const ambulanceCheck = await client.query(
+      `SELECT status FROM ambulance WHERE ambulance_id = $1 FOR UPDATE`,
+      [ambulance_id]
+    );
+    if (ambulanceCheck.rows.length === 0) {
+      throw { statusCode: 404, message: 'Ambulance not found' };
+    }
+    if (ambulanceCheck.rows[0].status !== 'available') {
+      throw { statusCode: 409, message: 'This ambulance is no longer available' };
+    }
+
+    // 1. Persist the incident
+    const incidentResult = await client.query(
+      `INSERT INTO incident (location, description, severity)
+       VALUES (ST_SetSRID(ST_MakePoint($1, $2), 4326), $3, $4)
+       RETURNING incident_id, reported_at`,
+      [lng, lat, description || 'Emergency reported via ProxiMed GH', severity || 'high']
+    );
+    const incident_id = incidentResult.rows[0].incident_id;
+
+    // 2. Create the dispatch record
+    const dispatchResult = await client.query(
+      `INSERT INTO dispatch (incident_id, ambulance_id, hospital_id, status)
+       VALUES ($1, $2, $3, 'assigned')
+       RETURNING dispatch_id, dispatch_time, status`,
+      [incident_id, ambulance_id, hospital_id]
+    );
+
+    // 3. Mark the ambulance en_route so it disappears from the "available" filter
+    await client.query(
+      `UPDATE ambulance SET status = 'en_route' WHERE ambulance_id = $1`,
+      [ambulance_id]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      dispatch_id: dispatchResult.rows[0].dispatch_id,
+      incident_id,
+      dispatch_time: dispatchResult.rows[0].dispatch_time,
+      status: dispatchResult.rows[0].status,
+      ambulance_id,
+      hospital_id
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    const statusCode = err.statusCode || 500;
+    console.error('Dispatch failed:', err.message);
+    res.status(statusCode).json({ error: err.message || 'Dispatch failed' });
+  } finally {
+    client.release();
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`ProxiMed GH server running on port ${PORT}`);
 });
